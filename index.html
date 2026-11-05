@@ -94,16 +94,19 @@ function hablar(txt) {
 // ---------- Comandos ----------
 async function procesar(texto) {
   log('yo', texto);
-  const t = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const t = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  const esPregunta = /^(que|cual|cuanto|cuantos|como|esta|estan|por que|quien|donde|cuando)\b/.test(t) || texto.includes('?');
   try {
-    if (t.length < 50 && /apag|desactiv|cort/.test(t)) {
+    if (!esPregunta && t.length < 50 && /\b(apag(a|ar|alo|ala)|desactiv(a|ar|alo|ala)|cort(a|ar|alo|ala))\b/.test(t)) {
       pintar(await esp('/api/rele?estado=off')); return hablar('Listo, apagado.');
     }
-    if (t.length < 50 && /prend|encend|activ|pone/.test(t)) {
+    if (!esPregunta && t.length < 50 && /\b(prend(e|er|elo|ela)|encend(e|er|elo|ela)|enciend(e|elo|ela)|activ(a|ar|alo|ala)|pon(e|er|elo|ela))\b/.test(t)) {
       pintar(await esp('/api/rele?estado=on')); return hablar('Listo, encendido.');
     }
-    if (/temperatura/.test(t) && datos) return hablar(`Hay ${datos.temperatura} grados.`);
-    if (/humedad/.test(t) && datos) return hablar(`La humedad es del ${datos.humedad} por ciento.`);
+    if (/temperatura/.test(t) && datos)
+      return hablar(datos.temperatura == null ? 'El sensor de temperatura no está dando datos.' : `Hay ${datos.temperatura} grados.`);
+    if (/humedad/.test(t) && datos)
+      return hablar(datos.humedad == null ? 'El sensor de humedad no está dando datos.' : `La humedad es del ${datos.humedad} por ciento.`);
     if (/corriente|consumo/.test(t) && datos) return hablar(`El consumo es de ${datos.corriente} amperes.`);
     if (/cuanto tiempo|tiempo de uso/.test(t) && datos) return hablar(`Estuvo encendido ${hms(datos.segundos_uso)}.`);
   } catch {
