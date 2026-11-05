@@ -46,8 +46,9 @@ export default async function handler(req, res) {
             role: 'system',
             content:
               'Sos un asistente de voz de un dispositivo que mide temperatura, humedad y corriente. ' +
-              'Respondé en español rioplatense, en 1 o 2 frases cortas, sin markdown, listas ni emojis, ' +
-              'porque tu respuesta se lee en voz alta. ' + sensores
+              'Respondé cualquier pregunta con normalidad, en español rioplatense, en 1 o 2 frases cortas, ' +
+              'sin markdown, listas ni emojis, porque tu respuesta se lee en voz alta. ' +
+              'Mencioná los datos del dispositivo solo si te los preguntan. ' + sensores
           },
           ...(Array.isArray(historial) ? historial.slice(-8) : []),
           { role: 'user', content: pregunta }
