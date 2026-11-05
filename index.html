@@ -95,21 +95,42 @@ function hablar(txt) {
 async function procesar(texto) {
   log('yo', texto);
   const t = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-  const esPregunta = /^(que|cual|cuanto|cuantos|como|esta|estan|por que|quien|donde|cuando)\b/.test(t) || texto.includes('?');
+  const esPregunta = /^(que|cual|cuanto|cuantos|como|esta|estan|por que|porque|porqué|quien|donde|cuando|hay|hace|me dices|podrias|podes|puedes)\b/.test(t) || /\?/.test(texto);
+
   try {
-    if (!esPregunta && t.length < 50 && /\b(apag(a|ar|alo|ala)|desactiv(a|ar|alo|ala)|cort(a|ar|alo|ala))\b/.test(t)) {
-      pintar(await esp('/api/rele?estado=off')); return hablar('Listo, apagado.');
+    if (!esPregunta && t.length < 80 && /\b(apag(a|ar|alo|ala|ate|uen|uenme)|desactiv(a|ar|alo|ala|ate)|cort(a|ar|alo|ala|ate))\b/.test(t)) {
+      pintar(await esp('/api/rele?estado=off'));
+      return hablar('Listo, apagado.');
     }
-    if (!esPregunta && t.length < 50 && /\b(prend(e|er|elo|ela)|encend(e|er|elo|ela)|enciend(e|elo|ela)|activ(a|ar|alo|ala)|pon(e|er|elo|ela))\b/.test(t)) {
-      pintar(await esp('/api/rele?estado=on')); return hablar('Listo, encendido.');
+
+    if (!esPregunta && t.length < 80 && /\b(prend(e|er|elo|ela|ete)|encend(e|er|elo|ela|ete)|enciend(e|elo|ela)|activ(a|ar|alo|ala|ate)|pon(e|er|elo|ela|ete)|enciende|activa)\b/.test(t)) {
+      pintar(await esp('/api/rele?estado=on'));
+      return hablar('Listo, encendido.');
     }
-    if (/temperatura/.test(t) && datos)
-      return hablar(datos.temperatura == null ? 'El sensor de temperatura no está dando datos.' : `Hay ${datos.temperatura} grados.`);
-    if (/humedad/.test(t) && datos)
-      return hablar(datos.humedad == null ? 'El sensor de humedad no está dando datos.' : `La humedad es del ${datos.humedad} por ciento.`);
-    if (/corriente|consumo/.test(t) && datos) return hablar(`El consumo es de ${datos.corriente} amperes.`);
-    if (/cuanto tiempo|tiempo de uso/.test(t) && datos) return hablar(`Estuvo encendido ${hms(datos.segundos_uso)}.`);
-  } catch {
+
+    if ((/temperatura|calor|frio/.test(t) || /cuanta.*temperatura/.test(t)) && datos) {
+      if (datos.temperatura == null) return hablar('El sensor de temperatura no está dando datos.');
+      return hablar(`Hay ${datos.temperatura} grados.`);
+    }
+
+    if ((/humedad|mojado|seco/.test(t) || /cuanta.*humedad/.test(t)) && datos) {
+      if (datos.humedad == null) return hablar('El sensor de humedad no está dando datos.');
+      return hablar(`La humedad es del ${datos.humedad} por ciento.`);
+    }
+
+    if ((/corriente|consumo|electricidad|energia|watts/.test(t) || /cuanto.*consumo/.test(t)) && datos) {
+      return hablar(`El consumo es de ${datos.corriente} amperes.`);
+    }
+
+    if ((/tiempo de uso|cuanto tiempo|cuanto estuvo|duracion|duración|uso/.test(t)) && datos) {
+      return hablar(`Estuvo encendido ${hms(datos.segundos_uso)}.`);
+    }
+
+    if ((/estado|como esta|como va|status/.test(t)) && datos) {
+      const estadoRel = datos.rele ? 'encendido' : 'apagado';
+      return hablar(`El aparato está ${estadoRel}.`);
+    }
+  } catch (error) {
     esp('/api/sonido?tipo=error').catch(() => {});
     return hablar('No me pude comunicar con el dispositivo.');
   }
