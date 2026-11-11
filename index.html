@@ -22,13 +22,14 @@
   #log{background:var(--card);border-radius:12px;padding:10px;height:220px;overflow:auto;font-size:.95rem;margin-top:10px}
   #log p{margin:6px 0}.yo{color:var(--acc)}.ia{color:var(--ok)}.err{color:var(--bad)}
   input{width:100%;background:var(--card);border:1px solid #2a2f3a;color:var(--txt);border-radius:8px;padding:8px;margin-top:10px}
+  .ayuda{color:var(--mut);font-size:.85rem;margin:6px 0 0}
 </style>
 </head>
 <body>
 <h1>Asistente <span id="estado">sin conexión</span></h1>
 
 <div class="grid">
-  <div class="card"><small>Temperatura</small><b id="t">--</b> °C</div>
+  <div class="card" id="ct"><small>Temperatura</small><b id="t">--</b> °C</div>
   <div class="card"><small>Humedad</small><b id="h">--</b> %</div>
   <div class="card" id="cc"><small>Corriente</small><b id="i">--</b> A</div>
   <div class="card"><small>Tiempo de uso</small><b id="u">--</b></div>
@@ -36,47 +37,25 @@
 <button id="rele">Aparato: --</button>
 <button id="mic">🎤 Hablar</button>
 <div id="log"></div>
-<input id="ip" placeholder="IP del ESP32 (ej: 172.20.10.2)">
-<small style="display:block;color:var(--mut);margin-top:6px">Ingresá la IP que muestra el Monitor Serie del ESP32 y tocá fuera del campo para probar.</small>
+<input id="ip" placeholder="IP del ESP32 (ej: 192.168.1.50)">
+<p class="ayuda">Ingresá la IP que muestra el Monitor Serie del ESP32 y tocá fuera del campo para probar.</p>
 
 <script>
-/* Ojo: esta página es https y el ESP32 es http. En Chrome del celular:
-   Configuración del sitio > Contenido no seguro > Permitir. */
+/* La página es https y el ESP32 es http. En Chrome: ícono a la izquierda de la URL >
+   Configuración del sitio > Contenido no seguro > Permitir (y Acceso a la red local > Permitir). */
 const $ = id => document.getElementById(id);
-let ip = localStorage.getItem('ip') || '';
+let ip = localStorage.getItem('ip') || '192.168.4.1';
 let datos = null, historial = [];
 $('ip').value = ip;
-
 $('ip').onchange = e => {
-  ip = e.target.value.trim().replace(/^https?:\\/\\//i, '').replace(/\\/$/, '');
-  $('ip').value = ip;
+  ip = e.target.value.trim().replace('http://', '');
   localStorage.setItem('ip', ip);
   actualizar();
 };
 
 const esp = async path => {
-  if (!ip) throw new Error('Ingresá la IP del ESP32.');
-  const url = `http://${ip}${path}`;
-  let r;
-  try {
-    r = await fetch(url, {
-      method: 'GET',
-      cache: 'no-store',
-      mode: 'cors',
-      signal: AbortSignal.timeout(6000)
-    });
-  } catch (e) {
-    if (e.name === 'TimeoutError') {
-      throw new Error('Tiempo agotado. Revisá la IP y que el celular esté conectado al hotspot del iPhone.');
-    }
-    throw new Error('El navegador bloqueó o no pudo alcanzar el ESP32. Revisá el permiso de red local y HTTPS/HTTP.');
-  }
-  if (!r.ok) throw new Error(`El ESP32 respondió HTTP ${r.status}.`);
-  try {
-    return await r.json();
-  } catch {
-    throw new Error('El ESP32 respondió, pero no devolvió JSON válido.');
-  }
+  const r = await fetch('http://' + ip + path, { signal: AbortSignal.timeout(4000) });
+  return r.json();
 };
 
 const log = (cls, txt) => {
@@ -84,17 +63,17 @@ const log = (cls, txt) => {
   $('log').appendChild(p); $('log').scrollTop = 1e9;
 };
 
-const hms = s => `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m ${s % 60}s`;
+const hms = s => Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm ' + (s % 60) + 's';
 
 function pintar(d) {
   datos = d;
-  $('t').textContent = d.temperatura ?? '--';
-  $('h').textContent = d.humedad ?? '--';
+  $('t').textContent = d.temperatura == null ? '--' : d.temperatura;
+  $('h').textContent = d.humedad == null ? '--' : d.humedad;
   $('i').textContent = d.corriente;
   $('u').textContent = hms(d.segundos_uso);
   $('rele').textContent = 'Aparato: ' + (d.rele ? 'ENCENDIDO' : 'APAGADO');
   $('cc').classList.toggle('alarma', d.alarma_corriente);
-  $('t').parentElement.classList.toggle('alarma', d.alarma_temp);
+  $('ct').classList.toggle('alarma', d.alarma_temp);
 }
 
 async function actualizar() {
@@ -102,24 +81,14 @@ async function actualizar() {
     pintar(await esp('/api/datos'));
     $('estado').textContent = 'conectado'; $('estado').className = 'on';
   } catch (e) {
-    $('estado').textContent = 'sin conexión';
-    $('estado').className = '';
-    // Mostrar el motivo en pantalla para distinguir IP incorrecta,
-    // timeout o bloqueo del navegador.
-    if (e.message && $('log').lastChild?.textContent !== e.message) {
-      log('err', e.message);
-    }
+    $('estado').textContent = 'sin conexión'; $('estado').className = '';
   }
 }
-setInterval(() => { if (ip) actualizar(); }, 3000);
-if (ip) actualizar();
+setInterval(actualizar, 2000); actualizar();
 
 $('rele').onclick = async () => {
-  try {
-    pintar(await esp('/api/rele?estado=toggle'));
-  } catch (e) {
-    log('err', e.message);
-  }
+  try { pintar(await esp('/api/rele?estado=toggle')); }
+  catch (e) { log('err', 'No me pude comunicar con el ESP32.'); }
 };
 
 // ---------- Voz del celular ----------
@@ -131,23 +100,34 @@ function hablar(txt) {
   speechSynthesis.speak(u);
 }
 
-// ---------- Comandos ----------
+// ---------- Comandos (sin expresiones regulares) ----------
+const APAGAR = ['apaga', 'apagar', 'apagalo', 'apagala', 'apagame', 'desactiva', 'desactivalo', 'corta', 'cortalo'];
+const PRENDER = ['prende', 'prender', 'prendelo', 'prendela', 'enciende', 'encender', 'encendelo', 'enciendelo', 'activa', 'activar', 'activalo', 'pone', 'ponelo'];
+const INICIO_PREGUNTA = ['que', 'cual', 'cuanto', 'cuantos', 'como', 'esta', 'estan', 'por', 'quien', 'donde', 'cuando'];
+
 async function procesar(texto) {
   log('yo', texto);
-  const t = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const t = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  const palabras = t.split(' ');
+  const esPregunta = INICIO_PREGUNTA.includes(palabras[0]) || texto.includes('?');
+  const tiene = lista => palabras.some(p => lista.includes(p));
   try {
-    if (t.length < 50 && /apag|desactiv|cort/.test(t)) {
+    if (!esPregunta && palabras.length < 8 && tiene(APAGAR)) {
       pintar(await esp('/api/rele?estado=off')); return hablar('Listo, apagado.');
     }
-    if (t.length < 50 && /prend|encend|activ|pone/.test(t)) {
+    if (!esPregunta && palabras.length < 8 && tiene(PRENDER)) {
       pintar(await esp('/api/rele?estado=on')); return hablar('Listo, encendido.');
     }
-    if (/temperatura/.test(t) && datos) return hablar(`Hay ${datos.temperatura} grados.`);
-    if (/humedad/.test(t) && datos) return hablar(`La humedad es del ${datos.humedad} por ciento.`);
-    if (/corriente|consumo/.test(t) && datos) return hablar(`El consumo es de ${datos.corriente} amperes.`);
-    if (/cuanto tiempo|tiempo de uso/.test(t) && datos) return hablar(`Estuvo encendido ${hms(datos.segundos_uso)}.`);
-  } catch {
-    esp('/api/beep').catch(() => {});
+    if (t.includes('temperatura') && datos)
+      return hablar(datos.temperatura == null ? 'El sensor de temperatura no está dando datos.' : 'Hay ' + datos.temperatura + ' grados.');
+    if (t.includes('humedad') && datos)
+      return hablar(datos.humedad == null ? 'El sensor de humedad no está dando datos.' : 'La humedad es del ' + datos.humedad + ' por ciento.');
+    if ((t.includes('corriente') || t.includes('consumo')) && datos)
+      return hablar('El consumo es de ' + datos.corriente + ' amperes.');
+    if ((t.includes('cuanto tiempo') || t.includes('tiempo de uso')) && datos)
+      return hablar('Estuvo encendido ' + hms(datos.segundos_uso) + '.');
+  } catch (e) {
+    esp('/api/sonido?tipo=error').catch(() => {});
     return hablar('No me pude comunicar con el dispositivo.');
   }
 
@@ -156,13 +136,13 @@ async function procesar(texto) {
     const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pregunta: texto, contexto: datos, historial })
+      body: JSON.stringify({ pregunta: texto, contexto: datos, historial: historial })
     });
-    const { respuesta, error } = await r.json();
-    if (error) throw new Error(error);
-    historial.push({ role: 'user', content: texto }, { role: 'assistant', content: respuesta });
+    const res = await r.json();
+    if (res.error) throw new Error(res.error);
+    historial.push({ role: 'user', content: texto }, { role: 'assistant', content: res.respuesta });
     historial = historial.slice(-8);
-    hablar(respuesta);
+    hablar(res.respuesta);
   } catch (e) {
     log('err', 'Error con la IA: ' + e.message);
   }
@@ -170,15 +150,17 @@ async function procesar(texto) {
 
 // ---------- Micrófono ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (!SR) { $('mic').disabled = true; log('err', 'Este navegador no soporta reconocimiento de voz. Usá Chrome.'); }
-else {
+if (!SR) {
+  $('mic').disabled = true;
+  log('err', 'Este navegador no soporta reconocimiento de voz. Usá Chrome.');
+} else {
   const rec = new SR();
   rec.lang = 'es-AR'; rec.interimResults = false;
-  rec.onstart = () => { $('mic').classList.add('esc'); $('mic').textContent = '🎙️ Escuchando...'; esp('/api/beep').catch(() => {}); };
+  rec.onstart = () => { $('mic').classList.add('esc'); $('mic').textContent = '🎙️ Escuchando...'; esp('/api/sonido?tipo=ok').catch(() => {}); };
   rec.onend = () => { $('mic').classList.remove('esc'); $('mic').textContent = '🎤 Hablar'; };
   rec.onerror = e => log('err', 'Micrófono: ' + e.error);
   rec.onresult = e => procesar(e.results[0][0].transcript);
-  $('mic').onclick = () => { speechSynthesis.cancel(); rec.start(); };
+  $('mic').onclick = () => { speechSynthesis.cancel(); try { rec.start(); } catch (e) {} };
 }
 </script>
 </body>
