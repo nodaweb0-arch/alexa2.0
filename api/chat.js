@@ -38,7 +38,7 @@ async function buscar(query) {
     const r = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ query, max_results: 4, include_answer: true, search_depth: 'basic' })
+      body: JSON.stringify({ query, max_results: 4, include_answer: false, search_depth: 'basic' })
     });
     const d = await r.json();
     if (!r.ok) return '';
@@ -88,10 +88,10 @@ export default async function handler(req, res) {
   let buscado = false;
   if (necesitaBusqueda(pregunta)) {
     buscado = true;
-    const fecha = new Date().toLocaleDateString('es-AR', {
-      timeZone: 'America/Argentina/Buenos_Aires', dateStyle: 'long'
-    });
-    web = await buscar(pregunta + ' ' + fecha);
+    const t = pregunta.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const deportes = ['partido', 'salio', 'gano', 'ganaron', 'perdio', 'empato', 'finde', 'anoche', 'resultado']
+      .some(k => t.includes(k));
+    web = await buscar(deportes ? pregunta + ' último partido resultado' : pregunta);
   }
 
   let internet = '';
