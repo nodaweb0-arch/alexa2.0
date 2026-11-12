@@ -16,8 +16,8 @@
   .card b{font-size:1.6rem}
   .alarma b{color:var(--bad)}
   button{border:0;border-radius:12px;font-size:1rem;cursor:pointer;color:var(--txt);background:var(--card);padding:12px}
-  #mic{width:100%;margin:14px 0;padding:18px;background:var(--acc);color:#04111f;font-weight:700}
-  #mic.esc{background:var(--bad)}
+  #mic,#wake{width:100%;margin:14px 0;padding:18px;background:var(--acc);color:#04111f;font-weight:700}
+  #mic.esc,#wake.activo{background:var(--bad)}
   #rele{width:100%;margin-top:10px}
   #log{background:var(--card);border-radius:12px;padding:10px;height:220px;overflow:auto;font-size:.95rem;margin-top:10px}
   #log p{margin:6px 0}.yo{color:var(--acc)}.ia{color:var(--ok)}.err{color:var(--bad)}
@@ -36,6 +36,7 @@
 </div>
 <button id="rele">Aparato: --</button>
 <button id="mic">🎤 Hablar</button>
+<button id="wake" type="button">Activar “Kovelt”</button>
 <div id="log"></div>
 <input id="ip" placeholder="IP del ESP32 (ej: 192.168.1.50)">
 <p class="ayuda">Ingresá la IP que muestra el Monitor Serie del ESP32 y tocá fuera del campo para probar.</p>
@@ -55,6 +56,7 @@ $('ip').onchange = e => {
 
 const esp = async path => {
   const r = await fetch('http://' + ip + path, { signal: AbortSignal.timeout(4000) });
+  if (!r.ok) throw new Error('ESP32 respondió HTTP ' + r.status);
   return r.json();
 };
 
@@ -107,11 +109,15 @@ function hablar(txt) {
   let limpio = txt.split(' ').filter(w => !w.startsWith('http')).join(' ');
   for (const s of ['*', '_', '#', '`', '>']) limpio = limpio.split(s).join('');
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(limpio);
-  const v = elegirVoz();
-  if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'es-AR'; }
-  u.rate = 1.05;
-  speechSynthesis.speak(u);
+  return new Promise(resolve => {
+    const u = new SpeechSynthesisUtterance(limpio);
+    const v = elegirVoz();
+    if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'es-AR'; }
+    u.rate = 1.05;
+    u.onend = resolve;
+    u.onerror = resolve;
+    speechSynthesis.speak(u);
+  });
 }
 
 // ---------- Comandos (sin expresiones regulares) ----------
@@ -127,22 +133,22 @@ async function procesar(texto) {
   const tiene = lista => palabras.some(p => lista.includes(p));
   try {
     if (!esPregunta && palabras.length < 8 && tiene(APAGAR)) {
-      pintar(await esp('/api/rele?estado=off')); return hablar('Listo, apagado.');
+      pintar(await esp('/api/rele?estado=off')); return await hablar('Listo, apagado.');
     }
     if (!esPregunta && palabras.length < 8 && tiene(PRENDER)) {
-      pintar(await esp('/api/rele?estado=on')); return hablar('Listo, encendido.');
+      pintar(await esp('/api/rele?estado=on')); return await hablar('Listo, encendido.');
     }
     if (t.includes('temperatura') && datos)
-      return hablar(datos.temperatura == null ? 'El sensor de temperatura no está dando datos.' : 'Hay ' + datos.temperatura + ' grados.');
+      return await hablar(datos.temperatura == null ? 'El sensor de temperatura no está dando datos.' : 'Hay ' + datos.temperatura + ' grados.');
     if (t.includes('humedad') && datos)
-      return hablar(datos.humedad == null ? 'El sensor de humedad no está dando datos.' : 'La humedad es del ' + datos.humedad + ' por ciento.');
+      return await hablar(datos.humedad == null ? 'El sensor de humedad no está dando datos.' : 'La humedad es del ' + datos.humedad + ' por ciento.');
     if ((t.includes('corriente') || t.includes('consumo')) && datos)
-      return hablar('El consumo es de ' + datos.corriente + ' amperes.');
+      return await hablar('El consumo es de ' + datos.corriente + ' amperes.');
     if ((t.includes('cuanto tiempo') || t.includes('tiempo de uso')) && datos)
-      return hablar('Estuvo encendido ' + hms(datos.segundos_uso) + '.');
+      return await hablar('Estuvo encendido ' + hms(datos.segundos_uso) + '.');
   } catch (e) {
     esp('/api/sonido?tipo=error').catch(() => {});
-    return hablar('No me pude comunicar con el dispositivo.');
+    return await hablar('No me pude comunicar con el dispositivo.');
   }
 
   // Pregunta general -> IA
@@ -167,13 +173,121 @@ async function procesar(texto) {
 
     historial.push({ role: 'user', content: texto }, { role: 'assistant', content: res.respuesta });
     historial = historial.slice(-8);
-    hablar(res.respuesta || 'No recibí una respuesta.');
+    await hablar(res.respuesta || 'No recibí una respuesta.');
   } catch (e) {
     log('err', 'Error con la IA: ' + e.message);
   }
 }
 
-// ---------- Micrófono ----------
+// ---------- Palabra de activación Kovelt ----------
+const PALABRA_CLAVE = 'kovelt';
+let escuchaActiva = false;
+let procesando = false;
+let atentoHasta = 0;
+let recWake = null;
+
+function normalizar(s) {
+  return s.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/c/g, 'k').replace(/[bw]/g, 'v')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function distancia(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1,
+        d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return d[a.length][b.length];
+}
+
+function esPalabraClave(w) {
+  const n = normalizar(w);
+  return n.length >= 4 && distancia(n, normalizar(PALABRA_CLAVE)) <= 1;
+}
+
+function despuesDeLaPalabra(texto) {
+  const p = texto.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < p.length; i++) {
+    if (esPalabraClave(p[i])) return p.slice(i + 1).join(' ').trim();
+    if (i + 1 < p.length && esPalabraClave(p[i] + p[i + 1])) return p.slice(i + 2).join(' ').trim();
+  }
+  return null;
+}
+
+function iniciarEscucha() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('Este navegador no tiene reconocimiento de voz. Usá Chrome.'); return; }
+  if (escuchaActiva) return;
+
+  recWake = new SR();
+  recWake.lang = 'es-AR';
+  recWake.continuous = true;
+  recWake.interimResults = false;
+  recWake.onresult = e => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) alOirFrase(e.results[i][0].transcript.trim());
+    }
+  };
+  recWake.onend = () => {
+    if (escuchaActiva && !procesando) setTimeout(reanudar, 300);
+  };
+  recWake.onerror = e => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      escuchaActiva = false;
+      $('wake').textContent = 'Activar “Kovelt”';
+      $('wake').classList.remove('activo');
+      log('err', 'Permiso de micrófono denegado o falta HTTPS.');
+    }
+  };
+
+  escuchaActiva = true;
+  $('wake').textContent = 'Desactivar “Kovelt”';
+  $('wake').classList.add('activo');
+  reanudar();
+}
+
+function detenerEscucha() {
+  escuchaActiva = false;
+  atentoHasta = 0;
+  $('wake').textContent = 'Activar “Kovelt”';
+  $('wake').classList.remove('activo');
+  try { recWake?.stop(); } catch (_) {}
+}
+
+function reanudar() {
+  if (!recWake || !escuchaActiva || procesando) return;
+  try { recWake.start(); } catch (_) { /* ya estaba iniciado */ }
+}
+
+function alOirFrase(texto) {
+  if (procesando) return;
+  const orden = despuesDeLaPalabra(texto);
+  if (orden === null) {
+    if (Date.now() < atentoHasta) { atentoHasta = 0; ejecutar(texto); }
+    return;
+  }
+  if (orden) { ejecutar(orden); return; }
+  atentoHasta = Date.now() + 6000;
+  fetch('http://' + ip + '/api/beep', { signal: AbortSignal.timeout(2000) }).catch(() => {});
+}
+
+async function ejecutar(orden) {
+  procesando = true;
+  try { recWake?.stop(); } catch (_) {}
+  try { await procesar(orden); }
+  catch (e) { console.error(e); }
+  procesando = false;
+  if (escuchaActiva) setTimeout(reanudar, 300);
+}
+
+$('wake').onclick = () => escuchaActiva ? detenerEscucha() : iniciarEscucha();
+
+// ---------- Micrófono manual ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 if (!SR) {
   $('mic').disabled = true;
