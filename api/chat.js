@@ -53,6 +53,24 @@ async function buscar(query) {
 }
 
 export default async function handler(req, res) {
+    if (req.method === 'GET') {
+    const t = process.env.TAVILY_API_KEY;
+    let estado = t ? 'clave cargada' : 'FALTA TAVILY_API_KEY';
+    if (t) {
+      try {
+        const r = await fetch('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
+          body: JSON.stringify({ query: 'Boca Juniors último partido resultado', max_results: 2 })
+        });
+        const d = await r.json();
+        estado += ' | tavily HTTP ' + r.status + ' | ' + JSON.stringify(d).slice(0, 400);
+      } catch (e) {
+        estado += ' | error: ' + e.message;
+      }
+    }
+    return res.status(200).json({ estado });
+  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
 
   const { pregunta, contexto, historial } = req.body || {};
