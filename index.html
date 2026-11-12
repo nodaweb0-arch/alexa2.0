@@ -295,7 +295,6 @@ function alOirFrase(texto) {
   }
   atentoHasta = Date.now() + 6000;
   log('ia', 'Te escucho; decí la orden en los próximos 6 segundos.');
-  // El beep es opcional; que falle no interrumpe el reconocimiento.
   fetch('http://' + ip + '/api/beep', { signal: AbortSignal.timeout(2000) }).catch(() => {});
 }
 
