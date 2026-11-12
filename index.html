@@ -185,9 +185,10 @@ let escuchaActiva = false;
 let procesando = false;
 let atentoHasta = 0;
 let recWake = null;
+let reinicioWake = null;
 
 function normalizar(s) {
-  return s.toLowerCase()
+  return (s || '').toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/c/g, 'k').replace(/[bw]/g, 'v')
     .replace(/[^a-z0-9]/g, '');
@@ -221,27 +222,38 @@ function despuesDeLaPalabra(texto) {
 
 function iniciarEscucha() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { alert('Este navegador no tiene reconocimiento de voz. Usá Chrome.'); return; }
+  if (!SR) {
+    log('err', 'Este navegador no soporta reconocimiento de voz. Probá con Chrome.');
+    return;
+  }
   if (escuchaActiva) return;
 
   recWake = new SR();
   recWake.lang = 'es-AR';
   recWake.continuous = true;
   recWake.interimResults = false;
+  recWake.onstart = () => log('ia', 'Escuchando. Decí “Kovelt” seguido de una orden.');
   recWake.onresult = e => {
     for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) alOirFrase(e.results[i][0].transcript.trim());
+      if (e.results[i].isFinal) {
+        const frase = e.results[i][0].transcript.trim();
+        log('yo', 'Reconocí: ' + frase);
+        alOirFrase(frase);
+      }
     }
   };
   recWake.onend = () => {
-    if (escuchaActiva && !procesando) setTimeout(reanudar, 300);
+    if (escuchaActiva && !procesando) {
+      clearTimeout(reinicioWake);
+      reinicioWake = setTimeout(reanudar, 700);
+    }
   };
   recWake.onerror = e => {
+    log('err', 'Reconocimiento de voz: ' + e.error);
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
       escuchaActiva = false;
       $('wake').textContent = 'Activar “Kovelt”';
       $('wake').classList.remove('activo');
-      log('err', 'Permiso de micrófono denegado o falta HTTPS.');
     }
   };
 
@@ -254,35 +266,50 @@ function iniciarEscucha() {
 function detenerEscucha() {
   escuchaActiva = false;
   atentoHasta = 0;
+  clearTimeout(reinicioWake);
   $('wake').textContent = 'Activar “Kovelt”';
   $('wake').classList.remove('activo');
   try { recWake?.stop(); } catch (_) {}
+  log('ia', 'Escucha de Kovelt desactivada.');
 }
 
 function reanudar() {
   if (!recWake || !escuchaActiva || procesando) return;
-  try { recWake.start(); } catch (_) { /* ya estaba iniciado */ }
+  try { recWake.start(); } catch (_) { /* ya está iniciado */ }
 }
 
 function alOirFrase(texto) {
   if (procesando) return;
   const orden = despuesDeLaPalabra(texto);
   if (orden === null) {
-    if (Date.now() < atentoHasta) { atentoHasta = 0; ejecutar(texto); }
+    if (Date.now() < atentoHasta) {
+      atentoHasta = 0;
+      ejecutar(texto);
+    }
     return;
   }
-  if (orden) { ejecutar(orden); return; }
+  if (orden) {
+    atentoHasta = 0;
+    ejecutar(orden);
+    return;
+  }
   atentoHasta = Date.now() + 6000;
+  log('ia', 'Te escucho; decí la orden en los próximos 6 segundos.');
+  // El beep es opcional; que falle no interrumpe el reconocimiento.
   fetch('http://' + ip + '/api/beep', { signal: AbortSignal.timeout(2000) }).catch(() => {});
 }
 
 async function ejecutar(orden) {
   procesando = true;
+  clearTimeout(reinicioWake);
   try { recWake?.stop(); } catch (_) {}
   try { await procesar(orden); }
-  catch (e) { console.error(e); }
+  catch (e) { log('err', 'No pude procesar la orden: ' + e.message); }
   procesando = false;
-  if (escuchaActiva) setTimeout(reanudar, 300);
+  if (escuchaActiva) {
+    clearTimeout(reinicioWake);
+    reinicioWake = setTimeout(reanudar, 700);
+  }
 }
 
 $('wake').onclick = () => escuchaActiva ? detenerEscucha() : iniciarEscucha();
