@@ -31,20 +31,27 @@ function necesitaBusqueda(p) {
   return CLAVES.some(k => t.includes(k));
 }
 
-async function buscar(query) {
+async function buscar(query, reciente) {
   const key = process.env.TAVILY_API_KEY;
   if (!key) return '';
   try {
+    const cuerpo = { query, max_results: 6, include_answer: false, search_depth: 'basic' };
+    if (reciente) { cuerpo.topic = 'news'; cuerpo.days = 5; }
     const r = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ query, max_results: 4, include_answer: false, search_depth: 'basic' })
+      body: JSON.stringify(cuerpo)
     });
     const d = await r.json();
     if (!r.ok) return '';
-    let txt = d.answer ? 'Resumen: ' + d.answer + '\n' : '';
-    for (const x of (d.results || []).slice(0, 4)) {
-      txt += `- ${x.title}: ${(x.content || '').slice(0, 300)}\n`;
+    let lista = d.results || [];
+    if (reciente) {
+      lista = lista.sort((a, b) => new Date(b.published_date || 0) - new Date(a.published_date || 0));
+    }
+    let txt = '';
+    for (const x of lista.slice(0, 4)) {
+      const f = x.published_date ? ` (${x.published_date.slice(0, 16)})` : '';
+      txt += `- ${x.title}${f}: ${(x.content || '').slice(0, 300)}\n`;
     }
     return txt;
   } catch (e) {
@@ -91,13 +98,16 @@ export default async function handler(req, res) {
     const t = pregunta.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const deportes = ['partido', 'salio', 'gano', 'ganaron', 'perdio', 'empato', 'finde', 'anoche', 'resultado']
       .some(k => t.includes(k));
-    web = await buscar(deportes ? pregunta + ' último partido resultado' : pregunta);
+    const reciente = deportes || ['ayer', 'hoy', 'noticia', 'anoche'].some(k => t.includes(k));
+    web = await buscar(deportes ? pregunta + ' último partido resultado' : pregunta, reciente);
   }
 
   let internet = '';
   if (web) {
     internet = 'Resultados de una búsqueda en internet hecha recién (usalos para responder con el dato concreto, ' +
-      'por ejemplo resultado y fecha, y si no aparece lo que piden, decilo): \n' + web;
+      'por ejemplo resultado y fecha, y si no aparece lo que piden, decilo): ' +
+      'Si hay varios partidos o fechas, usá el más reciente respecto de la fecha de hoy y decí contra quién fue. ' +
+      '\n' + web;
   } else if (buscado) {
     internet = 'No pudiste consultar internet ahora: si te piden un dato actual, decí que no lo podés confirmar. ';
   }
