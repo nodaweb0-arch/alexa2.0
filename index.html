@@ -92,11 +92,25 @@ $('rele').onclick = async () => {
 };
 
 // ---------- Voz del celular ----------
+function elegirVoz() {
+  const voces = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith('es'));
+  const orden = ['es-AR', 'es-MX', 'es-US', 'es-419', 'es-ES'];
+  for (const l of orden) {
+    const v = voces.find(x => x.lang.split('_').join('-') === l);
+    if (v) return v;
+  }
+  return voces[0] || null;
+}
+
 function hablar(txt) {
   log('ia', txt);
+  let limpio = txt.split(' ').filter(w => !w.startsWith('http')).join(' ');
+  for (const s of ['*', '_', '#', '`', '>']) limpio = limpio.split(s).join('');
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(txt);
-  u.lang = 'es-AR';
+  const u = new SpeechSynthesisUtterance(limpio);
+  const v = elegirVoz();
+  if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'es-AR'; }
+  u.rate = 1.05;
   speechSynthesis.speak(u);
 }
 
@@ -136,7 +150,7 @@ async function procesar(texto) {
     const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pregunta: texto, contexto: datos, historial: historial })
+      body: JSON.stringify({ pregunta: texto, contexto: Object.assign({ ahora: new Date().toLocaleString('es-AR', { dateStyle: 'full', timeStyle: 'short' }) }, datos || {}), historial: historial })
     });
     const res = await r.json();
     if (res.error) throw new Error(res.error);
