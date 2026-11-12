@@ -20,6 +20,22 @@ async function elegirModelo(key) {
   return modeloCache;
 }
 
+function normalizarTexto(t) {
+  return (t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+function detectarAccionPregunta(pregunta) {
+  const texto = normalizarTexto(pregunta);
+  if (!texto) return null;
+
+  const prende = /(prende|prender|enciende|encender|activar|activa|activalo|encendelo|encendela|ponga|ponelo|abri|abrir|encendé)/.test(texto);
+  const apaga = /(apaga|apagar|apagalo|apagala|desactiva|desactivar|corta|cortalo|apagá|apaguen|apague|apaguen)/.test(texto);
+
+  if (prende) return { tipo: 'rele', estado: 'on' };
+  if (apaga) return { tipo: 'rele', estado: 'off' };
+  return null;
+}
+
 // ---------- Búsqueda web (Tavily) ----------
 const CLAVES = ['partido', 'resultado', 'salio', 'gano', 'ganaron', 'perdio', 'empato', 'score',
   'noticia', 'clima', 'pronostico', 'hoy', 'ayer', 'anoche', 'ultimo', 'ultima', 'actual',
@@ -27,7 +43,7 @@ const CLAVES = ['partido', 'resultado', 'salio', 'gano', 'ganaron', 'perdio', 'e
   'fixture', 'cuando juega', 'quien es', 'presidente', 'estreno', 'cuanto esta', 'cuanto sale'];
 
 function necesitaBusqueda(p) {
-  const t = p.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const t = normalizarTexto(p);
   return CLAVES.some(k => t.includes(k));
 }
 
@@ -36,7 +52,11 @@ async function buscar(query, reciente) {
   if (!key) return '';
   try {
     const cuerpo = { query, max_results: 6, include_answer: false, search_depth: 'basic' };
-    if (reciente) { cuerpo.topic = 'news'; cuerpo.days = 5; }
+    if (reciente) {
+      cuerpo.topic = 'news';
+      cuerpo.days = 5;
+    }
+
     const r = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -44,10 +64,12 @@ async function buscar(query, reciente) {
     });
     const d = await r.json();
     if (!r.ok) return '';
+
     let lista = d.results || [];
     if (reciente) {
-      lista = lista.sort((a, b) => new Date(b.published_date || 0) - new Date(a.published_date || 0));
+      lista = [...lista].sort((a, b) => new Date(b.published_date || 0) - new Date(a.published_date || 0));
     }
+
     let txt = '';
     for (const x of lista.slice(0, 4)) {
       const f = x.published_date ? ` (${x.published_date.slice(0, 16)})` : '';
@@ -60,7 +82,7 @@ async function buscar(query, reciente) {
 }
 
 export default async function handler(req, res) {
-    if (req.method === 'GET') {
+  if (req.method === 'GET') {
     const t = process.env.TAVILY_API_KEY;
     let estado = t ? 'clave cargada' : 'FALTA TAVILY_API_KEY';
     if (t) {
@@ -78,6 +100,7 @@ export default async function handler(req, res) {
     }
     return res.status(200).json({ estado });
   }
+
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
 
   const { pregunta, contexto, historial } = req.body || {};
@@ -91,11 +114,13 @@ export default async function handler(req, res) {
       `humedad ${c.humedad} %, corriente ${c.corriente} A, aparato ${c.rele ? 'encendido' : 'apagado'}.`
     : '';
 
+  const accion = detectarAccionPregunta(pregunta);
+
   let web = '';
   let buscado = false;
   if (necesitaBusqueda(pregunta)) {
     buscado = true;
-    const t = pregunta.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const t = normalizarTexto(pregunta);
     const deportes = ['partido', 'salio', 'gano', 'ganaron', 'perdio', 'empato', 'finde', 'anoche', 'resultado']
       .some(k => t.includes(k));
     const reciente = deportes || ['ayer', 'hoy', 'noticia', 'anoche'].some(k => t.includes(k));
@@ -105,7 +130,7 @@ export default async function handler(req, res) {
   let internet = '';
   if (web) {
     internet = 'Resultados de una búsqueda en internet hecha recién (usalos para responder con el dato concreto, ' +
-      'por ejemplo resultado y fecha, y si no aparece lo que piden, decilo): ' +
+      'por ejemplo resultado y fecha, y si no aparece lo que piden, decilo). ' +
       'Si hay varios partidos o fechas, usá el más reciente respecto de la fecha de hoy y decí contra quién fue. ' +
       '\n' + web;
   } else if (buscado) {
@@ -116,7 +141,8 @@ export default async function handler(req, res) {
     'Sos Alexa 2.0, un asistente de voz amable y canchero, con un dispositivo que mide temperatura, humedad y corriente. ' +
     'Hablás en español rioplatense natural, como una persona: respuestas de 1 a 3 frases cortas, sin markdown, listas, ' +
     'links, citas ni emojis, porque se leen en voz alta. No tenés herramientas ni podés navegar: respondé solo con ' +
-    'lo que sabés y con los resultados que te pasen acá. ' + ahora + sensores + '\n' + internet;
+    'lo que sabés y con los resultados que te pasen acá. ' + ahora + sensores + '\n' + internet +
+    (accion ? ' Si te piden encender o apagar el aparato, responde corta y luego ejecutá la acción por separado.' : '');
 
   try {
     const model = await elegirModelo(key);
@@ -138,7 +164,12 @@ export default async function handler(req, res) {
     });
     const data = await r.json();
     if (!r.ok) return res.status(500).json({ error: `(${model}) ` + (data?.error?.message || 'Error de la API') });
-    res.status(200).json({ respuesta: (data.choices?.[0]?.message?.content || '').trim() });
+
+    const respuesta = (data.choices?.[0]?.message?.content || '').trim();
+    res.status(200).json({
+      respuesta,
+      acciones: accion ? [accion] : []
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
