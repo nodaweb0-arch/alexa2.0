@@ -150,13 +150,24 @@ async function procesar(texto) {
     const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pregunta: texto, contexto: Object.assign({ ahora: new Date().toLocaleString('es-AR', { dateStyle: 'full', timeStyle: 'short' }) }, datos || {}), historial: historial })
+      body: JSON.stringify({ pregunta: texto, contexto: Object.assign({ ahora: new Date().toLocaleString('es-AR', { dateStyle: 'full', timeStyle: 'short' }) }, datos || {}), historial })
     });
     const res = await r.json();
     if (res.error) throw new Error(res.error);
+
+    for (const accion of (Array.isArray(res.acciones) ? res.acciones : [])) {
+      if (accion?.tipo === 'rele' && ['on', 'off'].includes(accion.estado)) {
+        try {
+          pintar(await esp('/api/rele?estado=' + encodeURIComponent(accion.estado)));
+        } catch (e) {
+          log('err', 'No se pudo ejecutar la acción en el dispositivo.');
+        }
+      }
+    }
+
     historial.push({ role: 'user', content: texto }, { role: 'assistant', content: res.respuesta });
     historial = historial.slice(-8);
-    hablar(res.respuesta);
+    hablar(res.respuesta || 'No recibí una respuesta.');
   } catch (e) {
     log('err', 'Error con la IA: ' + e.message);
   }
