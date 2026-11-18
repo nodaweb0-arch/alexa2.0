@@ -96,9 +96,9 @@ $('rele').onclick = async () => {
 // ---------- Voz del celular ----------
 function elegirVoz() {
   const voces = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith('es'));
-  const orden = ['es-AR', 'es-MX', 'es-US', 'es-419', 'es-ES'];
+  const orden = ['es-AR', 'es-419', 'es-MX', 'es-US', 'es-ES'];
   for (const l of orden) {
-    const v = voces.find(x => x.lang.split('_').join('-') === l);
+    const v = voces.find(x => x.lang.split('_').join('-').toLowerCase() === l.toLowerCase());
     if (v) return v;
   }
   return voces[0] || null;
@@ -113,7 +113,10 @@ function hablar(txt) {
     const u = new SpeechSynthesisUtterance(limpio);
     const v = elegirVoz();
     if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'es-AR'; }
-    u.rate = 1.05;
+    // Un ritmo apenas más pausado y un tono natural; la voz disponible depende del navegador/dispositivo.
+    u.rate = 0.96;
+    u.pitch = 1.02;
+    u.volume = 1;
     u.onend = resolve;
     u.onerror = resolve;
     speechSynthesis.speak(u);
@@ -128,7 +131,7 @@ const INICIO_PREGUNTA = ['que', 'cual', 'cuanto', 'cuantos', 'como', 'esta', 'es
 async function procesar(texto) {
   log('yo', texto);
   const t = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-  const palabras = t.split(' ');
+  const palabras = t.split(/\s+/).filter(Boolean);
   const esPregunta = INICIO_PREGUNTA.includes(palabras[0]) || texto.includes('?');
   const tiene = lista => palabras.some(p => lista.includes(p));
   try {
@@ -206,9 +209,15 @@ function distancia(a, b) {
   return d[a.length][b.length];
 }
 
+// El reconocimiento en español puede transcribir “Kovelt” como “Colt” o “Kobelt”.
+// Incluimos esas variantes frecuentes sin hacer demasiado permisiva la detección.
+const VARIANTES_PALABRA_CLAVE = ['kovelt', 'kobel', 'kobelt', 'kovel', 'kovet', 'kolt', 'kobalt', 'kover'];
 function esPalabraClave(w) {
   const n = normalizar(w);
-  return n.length >= 4 && distancia(n, normalizar(PALABRA_CLAVE)) <= 1;
+  return n.length >= 4 && VARIANTES_PALABRA_CLAVE.some(v => {
+    const variante = normalizar(v);
+    return n === variante || distancia(n, variante) <= 1;
+  });
 }
 
 function despuesDeLaPalabra(texto) {

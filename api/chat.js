@@ -28,8 +28,8 @@ function detectarAccionPregunta(pregunta) {
   const texto = normalizarTexto(pregunta);
   if (!texto) return null;
 
-  const prende = /(prende|prender|enciende|encender|activar|activa|activalo|encendelo|encendela|ponga|ponelo|abri|abrir|encendé)/.test(texto);
-  const apaga = /(apaga|apagar|apagalo|apagala|desactiva|desactivar|corta|cortalo|apagá|apaguen|apague|apaguen)/.test(texto);
+  const prende = /(prende|prender|enciende|encender|activar|activa|activalo|encendelo|encendela|ponga|ponelo|abri|abrir|encende)/.test(texto);
+  const apaga = /(apaga|apagar|apagalo|apagala|desactiva|desactivar|corta|cortalo|apaguen|apague)/.test(texto);
 
   if (prende) return { tipo: 'rele', estado: 'on' };
   if (apaga) return { tipo: 'rele', estado: 'off' };
@@ -138,11 +138,15 @@ export default async function handler(req, res) {
   }
 
   const system =
-    'Sos Alexa 2.0, un asistente de voz amable y canchero, con un dispositivo que mide temperatura, humedad y corriente. ' +
-    'Hablás en español rioplatense natural, como una persona: respuestas de 1 a 3 frases cortas, sin markdown, listas, ' +
-    'links, citas ni emojis, porque se leen en voz alta. No tenés herramientas ni podés navegar: respondé solo con ' +
-    'lo que sabés y con los resultados que te pasen acá. ' + ahora + sensores + '\n' + internet +
-    (accion ? ' Si te piden encender o apagar el aparato, responde corta y luego ejecutá la acción por separado.' : '');
+    'Sos Alexa 2.0, un asistente de voz cálido, atento y espontáneo. Hablás en español rioplatense natural, ' +
+    'con un tono cercano y humano, sin sonar como un contestador ni exagerar el slang. Adaptá el tono al momento: ' +
+    'mostrá entusiasmo cuando haya algo para celebrar, empatía si la persona está preocupada y calma al explicar; ' +
+    'no finjas emociones intensas ni repitas muletillas. Usá respuestas breves, normalmente de 1 a 3 frases, ' +
+    'con puntuación natural y palabras fáciles de pronunciar en voz alta. Sin markdown, listas, links, citas ni emojis. ' +
+    'Si no entendés algo, preguntá con amabilidad en vez de adivinar. No inventes datos. ' +
+    'Tenés un dispositivo que mide temperatura, humedad y corriente. Respondé con lo que sabés y con los resultados ' +
+    'que te pasen acá. ' + ahora + sensores + '\n' + internet +
+    (accion ? ' Si te piden encender o apagar el aparato, confirmalo de forma breve y natural; la acción se ejecuta por separado.' : '');
 
   try {
     const model = await elegirModelo(key);
