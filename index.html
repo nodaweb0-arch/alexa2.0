@@ -113,7 +113,6 @@ function hablar(txt) {
     const u = new SpeechSynthesisUtterance(limpio);
     const v = elegirVoz();
     if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'es-AR'; }
-    // Un ritmo apenas más pausado y un tono natural; la voz disponible depende del navegador/dispositivo.
     u.rate = 0.96;
     u.pitch = 1.02;
     u.volume = 1;
@@ -123,16 +122,18 @@ function hablar(txt) {
   });
 }
 
-// ---------- Comandos (sin expresiones regulares) ----------
+// ---------- Comandos ----------
 const APAGAR = ['apaga', 'apagar', 'apagalo', 'apagala', 'apagame', 'desactiva', 'desactivalo', 'corta', 'cortalo'];
 const PRENDER = ['prende', 'prender', 'prendelo', 'prendela', 'enciende', 'encender', 'encendelo', 'enciendelo', 'activa', 'activar', 'activalo', 'pone', 'ponelo'];
 const INICIO_PREGUNTA = ['que', 'cual', 'cuanto', 'cuantos', 'como', 'esta', 'estan', 'por', 'quien', 'donde', 'cuando'];
 
 async function procesar(texto) {
-  log('yo', texto);
-  const t = texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  const limpio = (texto || '').trim();
+  if (!limpio) return;
+  log('yo', limpio);
+  const t = limpio.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
   const palabras = t.split(/\s+/).filter(Boolean);
-  const esPregunta = INICIO_PREGUNTA.includes(palabras[0]) || texto.includes('?');
+  const esPregunta = INICIO_PREGUNTA.includes(palabras[0]) || limpio.includes('?');
   const tiene = lista => palabras.some(p => lista.includes(p));
   try {
     if (!esPregunta && palabras.length < 8 && tiene(APAGAR)) {
@@ -154,31 +155,29 @@ async function procesar(texto) {
     return await hablar('No me pude comunicar con el dispositivo.');
   }
 
-  // Pregunta general -> IA
   try {
     const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pregunta: texto, contexto: Object.assign({ ahora: new Date().toLocaleString('es-AR', { dateStyle: 'full', timeStyle: 'short' }) }, datos || {}), historial })
+      body: JSON.stringify({ pregunta: limpio, contexto: Object.assign({ ahora: new Date().toLocaleString('es-AR', { dateStyle: 'full', timeStyle: 'short' }) }, datos || {}), historial })
     });
     const res = await r.json();
-    if (res.error) throw new Error(res.error);
+    if (!r.ok || res.error) throw new Error(res.error || 'No hubo respuesta del asistente');
 
     for (const accion of (Array.isArray(res.acciones) ? res.acciones : [])) {
       if (accion?.tipo === 'rele' && ['on', 'off'].includes(accion.estado)) {
-        try {
-          pintar(await esp('/api/rele?estado=' + encodeURIComponent(accion.estado)));
-        } catch (e) {
-          log('err', 'No se pudo ejecutar la acción en el dispositivo.');
-        }
+        try { pintar(await esp('/api/rele?estado=' + encodeURIComponent(accion.estado))); }
+        catch (e) { log('err', 'No se pudo ejecutar la acción en el dispositivo.'); }
       }
     }
 
-    historial.push({ role: 'user', content: texto }, { role: 'assistant', content: res.respuesta });
+    const respuesta = (res.respuesta || '').trim();
+    historial.push({ role: 'user', content: limpio }, { role: 'assistant', content: respuesta });
     historial = historial.slice(-8);
-    await hablar(res.respuesta || 'No recibí una respuesta.');
+    await hablar(respuesta || 'No recibí una respuesta.');
   } catch (e) {
     log('err', 'Error con la IA: ' + e.message);
+    await hablar('No pude responder ahora. Probemos de nuevo.');
   }
 }
 
@@ -209,14 +208,19 @@ function distancia(a, b) {
   return d[a.length][b.length];
 }
 
-// El reconocimiento en español puede transcribir “Kovelt” como “Colt” o “Kobelt”.
-// Incluimos esas variantes frecuentes sin hacer demasiado permisiva la detección.
-const VARIANTES_PALABRA_CLAVE = ['kovelt', 'kobel', 'kobelt', 'kovel', 'kovet', 'kolt', 'kobalt', 'kover'];
+// Variantes reales del reconocimiento de voz y palabras cortas mal transcribidas.
+const VARIANTES_PALABRA_CLAVE = [
+  'kovelt', 'koelt', 'kovel', 'kovelth', 'kobelt', 'kovelt', 'colt', 'college',
+  'covelt', 'covel', 'koval', 'cobelt', 'kolt', 'colte', 'kobalt', 'novelt', 'govert'
+];
+
 function esPalabraClave(w) {
   const n = normalizar(w);
-  return n.length >= 4 && VARIANTES_PALABRA_CLAVE.some(v => {
+  if (n.length < 3) return false;
+  return VARIANTES_PALABRA_CLAVE.some(v => {
     const variante = normalizar(v);
-    return n === variante || distancia(n, variante) <= 1;
+    const limite = variante.length <= 4 ? 2 : 1;
+    return n === variante || distancia(n, variante) <= limite;
   });
 }
 
@@ -225,6 +229,12 @@ function despuesDeLaPalabra(texto) {
   for (let i = 0; i < p.length; i++) {
     if (esPalabraClave(p[i])) return p.slice(i + 1).join(' ').trim();
     if (i + 1 < p.length && esPalabraClave(p[i] + p[i + 1])) return p.slice(i + 2).join(' ').trim();
+    // El motor puede separar o unir parte del nombre.
+    if (i + 1 < p.length) {
+      const primerosDos = normalizar(p[i] + p[i + 1]);
+      if (primerosDos.startsWith('ko') && distancia(primerosDos.slice(0, 6), 'kovelt') <= 2)
+        return p.slice(i + 2).join(' ').trim();
+    }
   }
   return null;
 }
@@ -241,28 +251,55 @@ function iniciarEscucha() {
   recWake.lang = 'es-AR';
   recWake.continuous = true;
   recWake.interimResults = false;
+  recWake.maxAlternatives = 5;
   recWake.onstart = () => log('ia', 'Escuchando. Decí “Kovelt” seguido de una orden.');
   recWake.onresult = e => {
     for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) {
-        const frase = e.results[i][0].transcript.trim();
-        log('yo', 'Reconocí: ' + frase);
-        alOirFrase(frase);
+      if (!e.results[i].isFinal) continue;
+
+      const alternativas = [];
+      for (let j = 0; j < Math.min(e.results[i].length, 5); j++)
+        alternativas.push(e.results[i][j].transcript.trim());
+
+      let frase = alternativas[0] || '';
+      let orden = null;
+      for (const alternativa of alternativas) {
+        const encontrada = despuesDeLaPalabra(alternativa);
+        if (encontrada !== null) {
+          frase = alternativa;
+          orden = encontrada;
+          break;
+        }
+      }
+
+      log('yo', 'Reconocí: ' + frase);
+      if (orden !== null) {
+        if (orden) ejecutar(orden);
+        else {
+          atentoHasta = Date.now() + 6000;
+          log('ia', 'Te escucho; decí la orden en los próximos 6 segundos.');
+          fetch('http://' + ip + '/api/beep', { signal: AbortSignal.timeout(2000) }).catch(() => {});
+        }
+      } else if (Date.now() < atentoHasta) {
+        atentoHasta = 0;
+        ejecutar(frase);
       }
     }
   };
   recWake.onend = () => {
     if (escuchaActiva && !procesando) {
       clearTimeout(reinicioWake);
-      reinicioWake = setTimeout(reanudar, 700);
+      reinicioWake = setTimeout(reanudar, 500);
     }
   };
   recWake.onerror = e => {
+    if (['no-speech', 'aborted', 'audio-capture', 'network'].includes(e.error)) {
+      if (e.error === 'audio-capture') log('err', 'No pude acceder al micrófono.');
+      return;
+    }
     log('err', 'Reconocimiento de voz: ' + e.error);
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-      escuchaActiva = false;
-      $('wake').textContent = 'Activar “Kovelt”';
-      $('wake').classList.remove('activo');
+      detenerEscucha();
     }
   };
 
@@ -285,26 +322,6 @@ function detenerEscucha() {
 function reanudar() {
   if (!recWake || !escuchaActiva || procesando) return;
   try { recWake.start(); } catch (_) { /* ya está iniciado */ }
-}
-
-function alOirFrase(texto) {
-  if (procesando) return;
-  const orden = despuesDeLaPalabra(texto);
-  if (orden === null) {
-    if (Date.now() < atentoHasta) {
-      atentoHasta = 0;
-      ejecutar(texto);
-    }
-    return;
-  }
-  if (orden) {
-    atentoHasta = 0;
-    ejecutar(orden);
-    return;
-  }
-  atentoHasta = Date.now() + 6000;
-  log('ia', 'Te escucho; decí la orden en los próximos 6 segundos.');
-  fetch('http://' + ip + '/api/beep', { signal: AbortSignal.timeout(2000) }).catch(() => {});
 }
 
 async function ejecutar(orden) {

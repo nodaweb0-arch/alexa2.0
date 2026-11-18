@@ -7,6 +7,7 @@ const PREFERIDOS = [
 let modeloCache = null;
 
 async function elegirModelo(key) {
+  if (!key) throw new Error('Falta GROQ_API_KEY');
   if (modeloCache) return modeloCache;
   const r = await fetch('https://api.groq.com/openai/v1/models', {
     headers: { Authorization: `Bearer ${key}` }
@@ -27,16 +28,13 @@ function normalizarTexto(t) {
 function detectarAccionPregunta(pregunta) {
   const texto = normalizarTexto(pregunta);
   if (!texto) return null;
-
   const prende = /(prende|prender|enciende|encender|activar|activa|activalo|encendelo|encendela|ponga|ponelo|abri|abrir|encende)/.test(texto);
   const apaga = /(apaga|apagar|apagalo|apagala|desactiva|desactivar|corta|cortalo|apaguen|apague)/.test(texto);
-
   if (prende) return { tipo: 'rele', estado: 'on' };
   if (apaga) return { tipo: 'rele', estado: 'off' };
   return null;
 }
 
-// ---------- Búsqueda web (Tavily) ----------
 const CLAVES = ['partido', 'resultado', 'salio', 'gano', 'ganaron', 'perdio', 'empato', 'score',
   'noticia', 'clima', 'pronostico', 'hoy', 'ayer', 'anoche', 'ultimo', 'ultima', 'actual',
   'precio', 'cotizacion', 'dolar', 'euro', 'bitcoin', 'campeon', 'tabla', 'posiciones',
@@ -52,11 +50,7 @@ async function buscar(query, reciente) {
   if (!key) return '';
   try {
     const cuerpo = { query, max_results: 6, include_answer: false, search_depth: 'basic' };
-    if (reciente) {
-      cuerpo.topic = 'news';
-      cuerpo.days = 5;
-    }
-
+    if (reciente) { cuerpo.topic = 'news'; cuerpo.days = 5; }
     const r = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -64,21 +58,15 @@ async function buscar(query, reciente) {
     });
     const d = await r.json();
     if (!r.ok) return '';
-
     let lista = d.results || [];
-    if (reciente) {
-      lista = [...lista].sort((a, b) => new Date(b.published_date || 0) - new Date(a.published_date || 0));
-    }
-
+    if (reciente) lista = [...lista].sort((a, b) => new Date(b.published_date || 0) - new Date(a.published_date || 0));
     let txt = '';
     for (const x of lista.slice(0, 4)) {
       const f = x.published_date ? ` (${x.published_date.slice(0, 16)})` : '';
       txt += `- ${x.title}${f}: ${(x.content || '').slice(0, 300)}\n`;
     }
     return txt;
-  } catch (e) {
-    return '';
-  }
+  } catch (e) { return ''; }
 }
 
 export default async function handler(req, res) {
@@ -94,17 +82,14 @@ export default async function handler(req, res) {
         });
         const d = await r.json();
         estado += ' | tavily HTTP ' + r.status + ' | ' + JSON.stringify(d).slice(0, 400);
-      } catch (e) {
-        estado += ' | error: ' + e.message;
-      }
+      } catch (e) { estado += ' | error: ' + e.message; }
     }
     return res.status(200).json({ estado });
   }
 
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
-
   const { pregunta, contexto, historial } = req.body || {};
-  if (!pregunta) return res.status(400).json({ error: 'Falta la pregunta' });
+  if (!pregunta || !pregunta.trim()) return res.status(400).json({ error: 'Falta la pregunta' });
 
   const key = process.env.GROQ_API_KEY;
   const c = contexto || {};
@@ -115,14 +100,12 @@ export default async function handler(req, res) {
     : '';
 
   const accion = detectarAccionPregunta(pregunta);
-
   let web = '';
   let buscado = false;
   if (necesitaBusqueda(pregunta)) {
     buscado = true;
     const t = normalizarTexto(pregunta);
-    const deportes = ['partido', 'salio', 'gano', 'ganaron', 'perdio', 'empato', 'finde', 'anoche', 'resultado']
-      .some(k => t.includes(k));
+    const deportes = ['partido', 'salio', 'gano', 'ganaron', 'perdio', 'empato', 'finde', 'anoche', 'resultado'].some(k => t.includes(k));
     const reciente = deportes || ['ayer', 'hoy', 'noticia', 'anoche'].some(k => t.includes(k));
     web = await buscar(deportes ? pregunta + ' último partido resultado' : pregunta, reciente);
   }
@@ -131,8 +114,7 @@ export default async function handler(req, res) {
   if (web) {
     internet = 'Resultados de una búsqueda en internet hecha recién (usalos para responder con el dato concreto, ' +
       'por ejemplo resultado y fecha, y si no aparece lo que piden, decilo). ' +
-      'Si hay varios partidos o fechas, usá el más reciente respecto de la fecha de hoy y decí contra quién fue. ' +
-      '\n' + web;
+      'Si hay varios partidos o fechas, usá el más reciente respecto de la fecha de hoy y decí contra quién fue. \n' + web;
   } else if (buscado) {
     internet = 'No pudiste consultar internet ahora: si te piden un dato actual, decí que no lo podés confirmar. ';
   }
@@ -140,12 +122,10 @@ export default async function handler(req, res) {
   const system =
     'Sos Alexa 2.0, un asistente de voz cálido, atento y espontáneo. Hablás en español rioplatense natural, ' +
     'con un tono cercano y humano, sin sonar como un contestador ni exagerar el slang. Adaptá el tono al momento: ' +
-    'mostrá entusiasmo cuando haya algo para celebrar, empatía si la persona está preocupada y calma al explicar; ' +
-    'no finjas emociones intensas ni repitas muletillas. Usá respuestas breves, normalmente de 1 a 3 frases, ' +
-    'con puntuación natural y palabras fáciles de pronunciar en voz alta. Sin markdown, listas, links, citas ni emojis. ' +
-    'Si no entendés algo, preguntá con amabilidad en vez de adivinar. No inventes datos. ' +
-    'Tenés un dispositivo que mide temperatura, humedad y corriente. Respondé con lo que sabés y con los resultados ' +
-    'que te pasen acá. ' + ahora + sensores + '\n' + internet +
+    'mostrá entusiasmo cuando haya algo para celebrar, empatía si la persona está preocupada y calma al explicar. ' +
+    'Usá respuestas breves de 1 a 3 frases, fáciles de escuchar en voz alta. Sin markdown, listas, links, citas ni emojis. ' +
+    'Si no entendés algo, pedí una aclaración amable en vez de adivinar. No inventes datos. ' +
+    'Tenés un dispositivo que mide temperatura, humedad y corriente. ' + ahora + sensores + '\n' + internet +
     (accion ? ' Si te piden encender o apagar el aparato, confirmalo de forma breve y natural; la acción se ejecuta por separado.' : '');
 
   try {
@@ -156,7 +136,7 @@ export default async function handler(req, res) {
       messages: [
         { role: 'system', content: system },
         ...(Array.isArray(historial) ? historial.slice(-8) : []),
-        { role: 'user', content: pregunta }
+        { role: 'user', content: pregunta.trim() }
       ]
     };
     if (model.includes('gpt-oss')) cuerpo.reasoning_effort = 'low';
@@ -170,11 +150,8 @@ export default async function handler(req, res) {
     if (!r.ok) return res.status(500).json({ error: `(${model}) ` + (data?.error?.message || 'Error de la API') });
 
     const respuesta = (data.choices?.[0]?.message?.content || '').trim();
-    res.status(200).json({
-      respuesta,
-      acciones: accion ? [accion] : []
-    });
+    res.status(200).json({ respuesta: respuesta || 'No recibí una respuesta. Probemos de nuevo.', acciones: accion ? [accion] : [] });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: e.message || 'Error al consultar la IA' });
   }
 }
